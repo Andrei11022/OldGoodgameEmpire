@@ -208,12 +208,18 @@ export class ConstructionSystem {
    * Check if first construction is done and remove it
    */
   tick() {
-    const current = this.getCurrentConstruction();
+    // Purge any stale completed items from the front first
+    while (this.queue.length > 0 && this.queue[0].completed) {
+      this.queue.shift();
+    }
+
+    const current = this.queue[0];
     if (current && !current.completed) {
       const elapsed = Date.now() - current.startTime;
       if (elapsed >= current.duration) {
         current.completed = true;
-        return current; // Return completed item
+        this.queue.shift(); // Remove from queue immediately
+        return current;     // Return to engine for processing
       }
     }
     return null;

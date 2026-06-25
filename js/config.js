@@ -16,6 +16,17 @@ export const SAVE_KEY = 'free_empire_save_v4';  // v4 for new timer system
 // Castle Grid
 export const GATE = { x: Math.floor(GRID / 2), y: GRID - 1 };
 
+// Playable radius per castle level (Chebyshev distance from keep center)
+// Castle starts tiny (lvl1 = 4 tiles out from center) and grows with upgrades
+export const CASTLE_RADIUS = {
+  1: 4,   // 9x9 area — Wooden Keep
+  2: 5,   // 11x11 — Stone Keep
+  3: 6,   // 13x13 — Fortified Keep
+  4: 7,   // 15x15 — Castle
+  5: 8,   // 17x17 — Grand Castle
+  6: 9,   // 19x19 — Royal Castle (nearly full grid)
+};
+
 /**
  * BUILDING DEFINITIONS with LEVELS
  * Each building can be upgraded to level 1-20

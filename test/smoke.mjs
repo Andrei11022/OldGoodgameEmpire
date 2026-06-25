@@ -8,7 +8,8 @@ async function run() {
   engine.init();
 
   // Place a house at 5,5
-  const res = engine.placeBuilding(5, 5, 'house');
+  const center = 11; // GRID/2 = 11
+  const res = engine.placeBuilding(center + 1, center + 1, 'house');
   if (!res.success) {
     console.error('Place building failed:', res.error);
     process.exit(2);

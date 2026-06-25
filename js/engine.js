@@ -4,6 +4,7 @@
  */
 
 import { TICK_MS, BUILDINGS, UNITS, GATE, GRID, freshWorld } from './config.js';
+import { CASTLE_RADIUS } from './config.js';
 import { ConstructionSystem } from './construction.js';
 import { SaveSystem } from './save.js';
 import { BuildingSystem } from './buildings.js';
@@ -71,9 +72,13 @@ export class GameEngine {
     }
   }
 
-  /**
-   * Place a building
-   */
+  isInCastleArea(x, y) {
+    const center = Math.floor(GRID / 2);
+    const level = this.state.castleLevel || 1;
+    const radius = CASTLE_RADIUS[level] || 4;
+    return Math.abs(x - center) <= radius && Math.abs(y - center) <= radius;
+  }
+
   placeBuilding(x, y, buildingType) {
     const def = BUILDINGS[buildingType];
     if (!def) return { success: false, error: 'Invalid building' };
@@ -83,6 +88,11 @@ export class GameEngine {
     // Check tile empty
     if (this.state.tiles[key]) {
       return { success: false, error: 'Tile occupied' };
+    }
+
+    // Check castle radius
+    if (!this.isInCastleArea(x, y)) {
+      return { success: false, error: 'Outside castle grounds! Upgrade your castle to expand.' };
     }
 
     // Check unique
@@ -194,6 +204,38 @@ export class GameEngine {
   }
 
   /**
+   * Move a building from one tile to another
+   */
+  moveBuilding(fromX, fromY, toX, toY) {
+    const fromKey = `${fromX},${fromY}`;
+    const toKey = `${toX},${toY}`;
+    const tile = this.state.tiles[fromKey];
+
+    if (!tile) return { success: false, error: 'No building at source tile' };
+    if (this.state.tiles[toKey]) return { success: false, error: 'Destination occupied' };
+    if (!this.isInCastleArea(toX, toY)) return { success: false, error: 'Destination outside castle grounds' };
+
+    const def = BUILDINGS[tile.type];
+    if (def?.unique) return { success: false, error: 'Cannot move unique buildings' };
+
+    const blocked = this.construction.queue.some((q) => !q.completed && q.x === toX && q.y === toY);
+    if (blocked) return { success: false, error: 'Destination tile is under construction' };
+
+    // Move tile
+    this.state.tiles[toKey] = { ...tile };
+    delete this.state.tiles[fromKey];
+
+    // Move level data
+    if (this.state.buildingLevels[fromKey] !== undefined) {
+      this.state.buildingLevels[toKey] = this.state.buildingLevels[fromKey];
+      delete this.state.buildingLevels[fromKey];
+    }
+
+    this.save(true);
+    return { success: true };
+  }
+
+  /**
    * Process construction queue
    */
   tickConstruction() {
@@ -205,20 +247,22 @@ export class GameEngine {
         this.state.tiles[key] = { type: completed.buildingType };
         this.building.setLevel(this.state.buildingLevels, completed.x, completed.y, 1);
         if (this.state.hero) HeroSystem.addXP(this.state.hero, HeroSystem.constructionXP(completed.buildingType, 1));
-        // Add inbox message
         const bDef = BUILDINGS[completed.buildingType];
         this.state.inbox = MessageSystem.add(this.state.inbox, createConstructionMessage(bDef?.name || completed.buildingType, 1));
-        // Prestige from decoration
         if (bDef?.prestige) this.state.prestige = (this.state.prestige || 0) + bDef.prestige;
         return completed;
-      } else if (completed.type === 'upgrade') {
+      }
+
+      if (completed.type === 'upgrade') {
         this.building.incrementLevel(this.state.buildingLevels, completed.x, completed.y);
         const lvl = this.building.getLevel(this.state.buildingLevels, completed.x, completed.y);
         if (this.state.hero) HeroSystem.addXP(this.state.hero, HeroSystem.constructionXP(completed.buildingType, lvl));
         const bDef = BUILDINGS[completed.buildingType];
         this.state.inbox = MessageSystem.add(this.state.inbox, createConstructionMessage((bDef?.name || completed.buildingType) + ` Lvl ${lvl}`, lvl));
         return completed;
-      } else if (completed.type === 'castle-upgrade') {
+      }
+
+      if (completed.type === 'castle-upgrade') {
         this.state.castleLevel = completed.level;
         this.state.prestige = (this.state.prestige || 0) + (CASTLE_LEVELS[completed.level]?.prestigeGain || 0);
         return completed;
@@ -354,34 +398,6 @@ Reward: ${rewardStr}${quest.xp ? ` · +${quest.xp} XP` : ''}`,
   }
 
   /**
-   * Check and complete quests
-   */
-  tickQuests() {
-    const newlyCompleted = QuestSystem.checkQuests(this.state);
-    if (newlyCompleted.length === 0) return [];
-    for (const quest of newlyCompleted) {
-      const reward = quest.reward || {};
-      for (const [r, v] of Object.entries(reward)) {
-        if (r === 'prestige') this.state.prestige = (this.state.prestige || 0) + v;
-        else this.state.res[r] = (this.state.res[r] || 0) + v;
-      }
-      if (quest.xp && this.state.hero) HeroSystem.addXP(this.state.hero, quest.xp);
-      if (!this.state.questsCompleted) this.state.questsCompleted = [];
-      if (!this.state.questsCompleted.includes(quest.id)) this.state.questsCompleted.push(quest.id);
-      const rewardStr = Object.entries(reward).map(([r, v]) => `+${v} ${r}`).join(', ') || '';
-      this.state.inbox = MessageSystem.add(this.state.inbox, {
-        id: Date.now() + Math.random(),
-        type: 'system',
-        subject: `📜 Quest: ${quest.title}`,
-        body: `Completed!\nReward: ${rewardStr}${quest.xp ? ` · +${quest.xp} XP` : ''}`,
-        timestamp: Date.now(),
-        read: false,
-      });
-    }
-    return newlyCompleted;
-  }
-
-  /**
    * Tick active research
    */
   tickResearch() {
@@ -459,7 +475,7 @@ Reward: ${rewardStr}${quest.xp ? ` · +${quest.xp} XP` : ''}`,
     // Deduct cost
     for (const r in cost) this.state.res[r] -= cost[r];
 
-    // Queue castle upgrade as a special construction item
+    // Queue castle upgrade
     const item = {
       id: this.construction.nextId++,
       type: 'castle-upgrade',

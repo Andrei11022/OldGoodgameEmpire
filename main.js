@@ -12,6 +12,7 @@ import { HeroSystem, HERO_SKILLS, MAX_HERO_LEVEL } from './js/hero.js';
 import { MessageSystem, MSG_TYPES } from './js/messages.js';
 import { QuestSystem, QUEST_DEFS, QUEST_TYPES } from './js/quests.js';
 import { TILE_W, TILE_H, GRID, MARGIN, GATE, BUILDINGS, UNITS, TOOLS } from './js/config.js';
+import { CASTLE_RADIUS } from './js/config.js';
 
 // Global references
 const canvas = document.getElementById('game');
@@ -21,6 +22,8 @@ let hover = null;
 let selected = null;
 let selTile = null;
 let perim = [];
+// Move-tool state
+let moveSource = null;  // { x, y, buildingType, level } when picking up a building
 
 // ============================================================
 // INITIALIZATION
@@ -176,7 +179,7 @@ function tryPlaceBuilding(x, y) {
     return;
   }
 
-  if (!selected || selected === 'demolish') return;
+  if (!selected || selected === 'demolish' || selected === 'move') return;
 
   // Block placing on a tile already in the construction queue
   const inQueue = engine.construction.queue.some(q => !q.completed && q.x === x && q.y === y);
@@ -221,6 +224,42 @@ function demolishBuilding(x, y) {
     toast(def.name + ' demolished (50% back)', 'good');
     refreshHUD();
     closeSelPanel();
+  }
+}
+
+function handleMoveTool(x, y) {
+  const key = `${x},${y}`;
+  const tile = engine.state.tiles[key];
+
+  // Step 1: pick a source building
+  if (!moveSource) {
+    if (!tile) {
+      toast('Select a building to move first.', 'bad');
+      return;
+    }
+    if (BUILDINGS[tile.type]?.unique) {
+      toast('Cannot move the Keep.', 'bad');
+      return;
+    }
+    moveSource = {
+      x,
+      y,
+      buildingType: tile.type,
+      level: BuildingSystem.getLevel(engine.state.buildingLevels, x, y),
+    };
+    toast(`Picked up ${BUILDINGS[tile.type].name}. Click destination tile.`, 'good');
+    return;
+  }
+
+  // Step 2: place at destination
+  const result = engine.moveBuilding(moveSource.x, moveSource.y, x, y);
+  if (result.success) {
+    toast(`Moved ${BUILDINGS[moveSource.buildingType].name}.`, 'good');
+    moveSource = null;
+    refreshHUD();
+    closeSelPanel();
+  } else {
+    toast(result.error, 'bad');
   }
 }
 
@@ -901,7 +940,7 @@ function render() {
     if (hover && buildable(hover.x, hover.y)) {
       const tileKey = `${hover.x},${hover.y}`;
       const occupied = !!engine.state.tiles[tileKey] || engine.construction.queue.some(q => !q.completed && q.x === hover.x && q.y === hover.y);
-      const placing = selected && selected !== 'demolish';
+      const placing = (selected && selected !== 'demolish' && selected !== 'move') || moveSource;
       let color = 'rgba(255,255,255,.25)';
 
       if (placing) {
@@ -912,12 +951,55 @@ function render() {
         color = occupied ? 'rgba(212,84,58,.5)' : 'rgba(255,255,255,.12)';
       }
 
+      if (selected === 'move') {
+        color = occupied ? 'rgba(255,200,50,.55)' : 'rgba(255,255,255,.12)';
+      }
+
       const { sx, sy } = tileToScreen(hover.x, hover.y);
       drawDiamond(sx, sy);
       ctx.fillStyle = color;
       ctx.fill();
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    // Castle boundary outline
+    {
+      const center = Math.floor(GRID / 2);
+      const radius = CASTLE_RADIUS[engine.state.castleLevel || 1] || 4;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 200, 60, 0.35)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      // Draw the boundary edge tiles
+      const corners = [
+        [center - radius, center - radius],
+        [center + radius, center - radius],
+        [center + radius, center + radius],
+        [center - radius, center + radius],
+      ];
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        const [cx, cy] = corners[i];
+        const { sx, sy } = tileToScreen(cx, cy);
+        const pt = { x: sx, y: sy + TILE_H / 2 };
+        if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    // Move source ghost (building being picked up)
+    if (moveSource) {
+      const { sx, sy } = tileToScreen(moveSource.x, moveSource.y);
+      drawDiamond(sx, sy);
+      ctx.fillStyle = 'rgba(255,200,50,.4)';
+      ctx.fill();
+      ctx.strokeStyle = '#f2c14e';
+      ctx.lineWidth = 2;
       ctx.stroke();
     }
 
@@ -1464,7 +1546,14 @@ function inGrid(x, y) {
 }
 
 function buildable(x, y) {
-  return inGrid(x, y) && !isEdge(x, y);
+  if (!inGrid(x, y) || isEdge(x, y)) return false;
+  return isInPlayerArea(x, y);
+}
+
+function isInPlayerArea(x, y) {
+  const center = Math.floor(GRID / 2);
+  const radius = CASTLE_RADIUS[engine?.state?.castleLevel || 1] || 4;
+  return Math.abs(x - center) <= radius && Math.abs(y - center) <= radius;
 }
 
 function isEdge(x, y) {
@@ -1568,6 +1657,14 @@ function buildToolBar() {
   demolish.innerHTML = '<div class="gi">💥</div><div class="nm">Demolish</div><div class="cost">+50% back</div>';
   demolish.onclick = () => selectTool('demolish');
   bar.appendChild(demolish);
+
+  // Move tool
+  const move = document.createElement('div');
+  move.className = 'btn tool';
+  move.dataset.type = 'move';
+  move.innerHTML = '<div class="gi">🔀</div><div class="nm">Move</div><div class="cost">Pick &amp; place</div>';
+  move.onclick = () => { selectTool('move'); moveSource = null; };
+  bar.appendChild(move);
 }
 
 function selectTool(type) {
@@ -1575,6 +1672,7 @@ function selectTool(type) {
   document.querySelectorAll('#buildbar .btn').forEach((e) => e.classList.toggle('sel', e.dataset.type === selected));
   canvas.classList.toggle('placing', !!selected);
   document.getElementById('hint').style.display = selected ? 'block' : 'none';
+  if (type !== 'move') moveSource = null;
   closeSelPanel();
 }
 
@@ -1636,6 +1734,7 @@ window.addEventListener('mouseup', (e) => {
   const t = screenToTile(p.x, p.y);
   if (!inGrid(t.x, t.y)) return;
   if (selected === 'demolish') demolishBuilding(t.x, t.y);
+  else if (selected === 'move') handleMoveTool(t.x, t.y);
   else if (selected) tryPlaceBuilding(t.x, t.y);
   else engine.state.tiles[`${t.x},${t.y}`] ? openSelPanel(t.x, t.y) : closeSelPanel();
 });
@@ -1666,6 +1765,7 @@ canvas.addEventListener('touchend', () => {
     const t = screenToTile(drag.px, drag.py);
     if (inGrid(t.x, t.y)) {
       if (selected === 'demolish') demolishBuilding(t.x, t.y);
+      else if (selected === 'move') handleMoveTool(t.x, t.y);
       else if (selected) tryPlaceBuilding(t.x, t.y);
       else engine.state.tiles[`${t.x},${t.y}`] ? openSelPanel(t.x, t.y) : closeSelPanel();
     }
