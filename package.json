@@ -1,0 +1,8 @@
+{
+  "name": "free-empire",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test:smoke": "node test/smoke.mjs"
+  }
+}

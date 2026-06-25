@@ -57,6 +57,15 @@ function gameTick() {
   updateConstructionUI();
 }
 
+// Smooth UI updater for progress bars (runs at 4x tick frequency)
+setInterval(() => {
+  try {
+    updateConstructionUI();
+  } catch (e) {
+    // ignore during initialization
+  }
+}, 250);
+
 // ============================================================
 // HUD & UI UPDATES
 // ============================================================
@@ -80,27 +89,31 @@ function refreshHUD() {
 function updateConstructionUI() {
   const queue = engine.construction.getActiveConstruction();
   const queueEl = document.getElementById('constructionQueue');
-
-  if (queue.length === 0) {
+  // Show or hide the queue container
+  if (!queue || queue.length === 0) {
+    queueEl.style.display = 'none';
     queueEl.innerHTML = '<h4>⏳ Construction</h4>';
     return;
   }
 
-  let html = '<h4>⏳ Construction Queue</h4>';
+  queueEl.style.display = 'block';
+  let html = `<h4>⏳ Construction (${queue.length})</h4>`;
 
-  for (const item of queue) {
-    const progress = (Date.now() - item.startTime) / item.duration;
-    const remaining = Math.max(0, item.duration - (Date.now() - item.startTime));
-    const timeStr = ConstructionSystem.prototype.formatTime(remaining);
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i];
+    const elapsed = Date.now() - item.startTime;
+    const progress = item.duration > 0 ? Math.max(0, Math.min(1, elapsed / item.duration)) : 1;
+    const remaining = Math.max(0, item.duration - elapsed);
+    const timeStr = engine.construction.formatTime(remaining);
 
-    const buildingDef = BUILDINGS[item.buildingType];
+    const buildingDef = BUILDINGS[item.buildingType] || { gi: '?', name: item.buildingType };
     const name = item.type === 'build' ? `${buildingDef.gi} ${buildingDef.name}` : `${buildingDef.gi} ${buildingDef.name} → Lvl ${item.level}`;
+    const label = i === 0 ? 'Now' : `#${i + 1}`;
 
     html += `
       <div class="construct-item">
-        <div class="name">${name}</div>
-        <div class="timer">${timeStr}</div>
-        <div class="progress"><i style="width:${Math.min(100, progress * 100)}%"></i></div>
+        <div style="display:flex;justify-content:space-between"><div class="name">${name}</div><div class="timer">${label} · ${timeStr}</div></div>
+        <div class="progress"><i style="width:${Math.round(progress * 100)}%"></i></div>
       </div>
     `;
   }
