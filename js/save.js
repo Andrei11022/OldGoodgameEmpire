@@ -55,7 +55,17 @@ export class SaveSystem {
         return SaveSystem.migrateV3toV4(save);
       }
 
-      // Current version
+      // Ensure new v4+ fields exist (forward-compat for sessions started before new systems)
+      save.castleLevel = save.castleLevel || 1;
+      save.prestige = save.prestige || 0;
+      save.researched = save.researched || [];
+      save.activeResearch = save.activeResearch || null;
+      save.questsCompleted = save.questsCompleted || [];
+      save.inbox = save.inbox || [];
+      if (!save.hero) {
+        save.hero = { name: 'Lord', level: 1, xp: 0, skillPoints: 0, skills: { attack: 0, defense: 0, gathering: 0, construction: 0 } };
+      }
+
       return save;
     } catch (e) {
       console.error('Save load error:', e);

@@ -260,9 +260,67 @@ export const BUILDINGS = {
     baseTime: 2,
     desc: 'Decoration.',
   },
+
+  // ---- DECORATIONS (prestige buildings) ----
+  garden: {
+    name: 'Garden',
+    shape: 'farm',
+    gi: '🌸',
+    h: 16,
+    body: '#7a9a5a',
+    roof: '#4a7a2a',
+    deco: true,
+    maxLevel: 1,
+    baseCost: { wood: 20, gold: 10 },
+    baseTime: 10,
+    prestige: 5,
+    desc: 'A pleasant garden. +5 prestige.',
+  },
+  statue: {
+    name: 'Statue',
+    shape: 'tower',
+    gi: '🗿',
+    h: 24,
+    body: '#a8a298',
+    roof: '#888080',
+    deco: true,
+    maxLevel: 1,
+    baseCost: { stone: 60, gold: 30 },
+    baseTime: 60,
+    prestige: 20,
+    desc: 'A grand statue. +20 prestige.',
+  },
+  fountain: {
+    name: 'Fountain',
+    shape: 'quarry',
+    gi: '⛲',
+    h: 18,
+    body: '#7aaccc',
+    roof: '#4a7ca0',
+    deco: true,
+    maxLevel: 1,
+    baseCost: { stone: 80, gold: 50 },
+    baseTime: 90,
+    prestige: 30,
+    desc: 'A marble fountain. +30 prestige.',
+  },
+  flagpole: {
+    name: 'Flagpole',
+    shape: 'tower',
+    gi: '🚩',
+    h: 36,
+    body: '#5a3a1e',
+    roof: '#c83a3a',
+    deco: true,
+    maxLevel: 1,
+    baseCost: { wood: 30 },
+    baseTime: 15,
+    prestige: 10,
+    desc: 'Your banner flies high. +10 prestige.',
+  },
 };
 
-export const TOOLS = ['house', 'woodcutter', 'quarry', 'farm', 'windmill', 'market', 'storehouse', 'barracks', 'tower', 'innerwall', 'tree'];
+export const TOOLS = ['house', 'woodcutter', 'quarry', 'farm', 'windmill', 'market', 'storehouse', 'barracks', 'tower', 'innerwall', 'tree', 'garden', 'statue', 'fountain', 'flagpole'];
 
 /**
  * UNITS for combat
