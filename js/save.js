@@ -23,6 +23,12 @@ export class SaveSystem {
         view: state.view,
         construction: state.construction.toJSON(),
         buildingLevels: state.buildingLevels || {},
+        audioSettings: state.audioSettings || {
+          musicVolume: 0.6,
+          sfxVolume: 0.8,
+          muteMusic: false,
+          muteSfx: false,
+        },
       };
 
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
@@ -62,6 +68,12 @@ export class SaveSystem {
       save.activeResearch = save.activeResearch || null;
       save.questsCompleted = save.questsCompleted || [];
       save.inbox = save.inbox || [];
+      save.audioSettings = save.audioSettings || {
+        musicVolume: 0.6,
+        sfxVolume: 0.8,
+        muteMusic: false,
+        muteSfx: false,
+      };
       if (!save.hero) {
         save.hero = { name: 'Lord', level: 1, xp: 0, skillPoints: 0, skills: { attack: 0, defense: 0, gathering: 0, construction: 0 } };
       }
@@ -93,6 +105,12 @@ export class SaveSystem {
         nextId: 1,
       },
       buildingLevels: {}, // All buildings start at level 1
+      audioSettings: {
+        musicVolume: 0.6,
+        sfxVolume: 0.8,
+        muteMusic: false,
+        muteSfx: false,
+      },
     };
   }
 

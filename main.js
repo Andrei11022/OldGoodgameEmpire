@@ -13,11 +13,21 @@ import { MessageSystem, MSG_TYPES } from './js/messages.js';
 import { QuestSystem, QUEST_DEFS, QUEST_TYPES } from './js/quests.js';
 import { TILE_W, TILE_H, GRID, MARGIN, GATE, BUILDINGS, UNITS, TOOLS } from './js/config.js';
 import { CASTLE_RADIUS } from './js/config.js';
+import { AssetManager } from './js/assetManager.js';
+import { AudioManager } from './js/audioManager.js';
+import { SpriteRenderer } from './js/spriteRenderer.js';
+import { AnimationManager } from './js/animationManager.js';
 
 // Global references
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
+
 let engine = null;
+let assetManager = null;
+let audioManager = null;
+let spriteRenderer = null;
+let animationManager = null;
+let audioBootstrapped = false;
 let hover = null;
 let selected = null;
 let selTile = null;
@@ -25,13 +35,40 @@ let perim = [];
 // Move-tool state
 let moveSource = null;  // { x, y, buildingType, level } when picking up a building
 
+// Developer content-pipeline state
+let devMode = false;
+let fps = 0;
+let lastFrameTs = performance.now();
+
 // ============================================================
 // INITIALIZATION
 // ============================================================
 
-function init() {
+async function init() {
   engine = new GameEngine();
   engine.init();
+  assetManager = new AssetManager();
+  animationManager = new AnimationManager();
+  const preloadManifest = assetManager.getPreloadManifest();
+  audioManager = new AudioManager(assetManager, {
+    onSettingsChanged: persistAudioSettings,
+  });
+  spriteRenderer = new SpriteRenderer(assetManager, {
+    tileW: TILE_W,
+    tileH: TILE_H,
+    toScreen: (x, y) => tileToScreen(x, y),
+    fallbackBuilding: ({ x, y, def }) => drawBuildingProcedural(x, y, def),
+    fallbackCastle: ({ x, y, def }) => drawBuildingProcedural(x, y, def),
+    fallbackWall: ({ x, y, def }) => drawBuildingProcedural(x, y, def),
+    fallbackDecoration: ({ x, y, def }) => drawBuildingProcedural(x, y, def),
+    fallbackConstruction: ({ x, y, def, progress }) => drawScaffoldProcedural(x, y, def, progress),
+    animationManager,
+  });
+
+  await preloadAssets(preloadManifest);
+  void assetManager.discoverCatalogAssets();
+  setupAudioOnFirstInteraction();
+  updateDevModeUI();
 
   resize();
   buildPerimeter();
@@ -42,6 +79,134 @@ function init() {
   setInterval(gameTick, 1000);
 
   setTimeout(() => toast('Welcome, my liege. Build within the walls, then march on the World Map. 👑'), 400);
+}
+
+function persistAudioSettings(settings) {
+  if (!engine) return;
+  engine.state.audioSettings = { ...settings };
+  engine.save(true);
+}
+
+function updateLoadingScreen(progress) {
+  const p = Math.max(0, Math.min(1, progress));
+  const pct = Math.round(p * 100);
+  const fill = document.getElementById('loadingBarFill');
+  const pctEl = document.getElementById('loadingPct');
+  if (fill) fill.style.width = `${pct}%`;
+  if (pctEl) pctEl.textContent = `${pct}%`;
+}
+
+function hideLoadingScreen() {
+  const screen = document.getElementById('loadingScreen');
+  if (screen) screen.style.display = 'none';
+}
+
+async function preloadAssets(manifest) {
+  updateLoadingScreen(0);
+  const interval = setInterval(() => {
+    updateLoadingScreen(assetManager.getProgress());
+  }, 80);
+
+  await assetManager.load(manifest);
+
+  clearInterval(interval);
+  updateLoadingScreen(1);
+  hideLoadingScreen();
+}
+
+function setupAudioOnFirstInteraction() {
+  const startAudio = () => {
+    if (audioBootstrapped) return;
+    audioBootstrapped = true;
+    const themePath = assetManager.getMusicPath('theme');
+
+    audioManager.init(engine.state.audioSettings || {});
+    audioManager.playMusic(themePath, {
+      loop: true,
+      fadeInMs: 1200,
+      key: themePath,
+    });
+  };
+
+  window.addEventListener('pointerdown', startAudio, { once: true });
+}
+
+function updateDevModeUI() {
+  const overlay = document.getElementById('devOverlay');
+  const browserBtn = document.getElementById('assetBrowserBtn');
+  if (overlay) overlay.style.display = devMode ? 'block' : 'none';
+  if (browserBtn) browserBtn.style.display = devMode ? 'inline-block' : 'none';
+}
+
+function updateDevOverlay() {
+  if (!devMode) return;
+  const overlay = document.getElementById('devOverlay');
+  if (!overlay) return;
+
+  const renderStats = spriteRenderer.getDebugStats();
+  const animStats = animationManager.getDebugStats();
+  const activePreview = animStats.animations.slice(0, 3)
+    .map((a) => `${a.id.split('|')[0]}:${a.clip}[f${a.frameIndex}]@${a.frameRate.toFixed(1)}fps t=${Math.round(a.elapsedMs)}ms`)
+    .join('<br>');
+  const missing = assetManager.getErrors().filter((e) => e.type === 'image').length;
+  const loadedTextures = assetManager.getTextureCount();
+
+  overlay.innerHTML = `<h5>Developer Overlay</h5>
+    <div><span class="k">FPS:</span> <span class="v">${fps.toFixed(1)}</span></div>
+    <div><span class="k">Draw Calls:</span> <span class="v">${renderStats.drawCalls}</span></div>
+    <div><span class="k">Sprite Draws:</span> <span class="v">${renderStats.spriteDraws}</span></div>
+    <div><span class="k">Fallback Active:</span> <span class="v">${renderStats.fallbackDraws > 0 ? 'YES' : 'NO'} (${renderStats.fallbackDraws})</span></div>
+    <div><span class="k">Missing Assets:</span> <span class="v">${missing}</span></div>
+    <div><span class="k">Loaded Textures:</span> <span class="v">${loadedTextures}</span></div>
+    <div><span class="k">Active Animations:</span> <span class="v">${animStats.activeCount}</span></div>
+    <div><span class="k">Atlas Usage:</span> <span class="v">${animStats.atlasUsage}</span></div>
+    <div><span class="k">Last Asset ID:</span> <span class="v">${renderStats.lastAssetId || 'n/a'}</span></div>
+    <div><span class="k">Last Status:</span> <span class="v">${renderStats.lastStatus}</span></div>
+    <div><span class="k">Anim Frame:</span> <span class="v">${renderStats.lastAnimationFrame ?? 'n/a'}</span></div>
+    <div><span class="k">Anim FPS:</span> <span class="v">${renderStats.lastAnimationFps ? renderStats.lastAnimationFps.toFixed(1) : 'n/a'}</span></div>
+    <div><span class="k">Anim Time:</span> <span class="v">${renderStats.lastAnimationTimeMs != null ? Math.round(renderStats.lastAnimationTimeMs) + 'ms' : 'n/a'}</span></div>
+    <div style="margin-top:6px"><span class="k">Active:</span><br>${activePreview || '<span class="v">none</span>'}</div>`;
+}
+
+function openAssetBrowser() {
+  if (!devMode) {
+    toast('Enable developer mode first (F8).', 'bad');
+    return;
+  }
+
+  const rows = assetManager.getCatalogDebugRows();
+  const modal = document.getElementById('modal');
+  const mbg = document.getElementById('mbg');
+
+  let html = `<h2>🧰 Asset Browser</h2>
+    <div class="sub">Catalog assets, discovery status, and previews (dev-only).</div>
+    <div style="max-height:55vh;overflow:auto;padding-right:4px">`;
+
+  for (const row of rows) {
+    const firstLoaded = row.discovered.find((d) => d.status === 'loaded');
+    const status = row.loaded > 0 ? 'loaded' : row.missing > 0 ? 'missing' : 'pending';
+    const statusColor = status === 'loaded' ? '#7bc043' : status === 'missing' ? '#d4543a' : '#c8a860';
+    const sizeStr = `${row.spriteSize.width}x${row.spriteSize.height}`;
+
+    html += `<div class="urow" style="align-items:flex-start;gap:8px">
+      <div style="width:52px;height:52px;border:1px solid #6a4422;border-radius:6px;background:#0f131a;display:flex;align-items:center;justify-content:center;overflow:hidden;flex:0 0 auto">
+        ${firstLoaded ? `<img src="${firstLoaded.path}" style="max-width:50px;max-height:50px;image-rendering:auto">` : '<span style="font-size:10px;color:#9ab">N/A</span>'}
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;gap:8px"><b>${row.id}</b><span style="color:${statusColor};font-size:11px;font-weight:bold">${status}</span></div>
+        <div class="uc">Category: ${row.category} · Type: ${row.sourceType} · Size: ${sizeStr}</div>
+        <div class="uc">Animation: ${row.animation ? 'yes' : 'no'}${row.frameCount ? ` · ${row.frameCount}f @ ${Math.round(1000 / Math.max(1, row.frameMs || 120))}fps` : ''}</div>
+        <div class="uc">Clips: ${(row.animationClips && row.animationClips.length > 0) ? row.animationClips.join(', ') : '-'}</div>
+        <div class="uc">Path: ${firstLoaded ? firstLoaded.path : (row.discovered[0]?.path || row.source)}</div>
+        <div class="uc">Loaded: ${row.loaded} · Missing: ${row.missing} · Fallback: ${row.fallbackActive ? 'yes' : 'no'}</div>
+      </div>
+    </div>`;
+  }
+
+  html += '</div><div class="mfoot"><button class="mclose" id="asset-browser-close">Close</button></div>';
+  modal.innerHTML = html;
+  mbg.style.display = 'flex';
+  document.getElementById('asset-browser-close').onclick = closeModal;
 }
 
 // ============================================================
@@ -801,6 +966,89 @@ function openQuestsPanel(filterType = null) {
 }
 
 // ============================================================
+// SETTINGS PANEL
+// ============================================================
+
+function openSettingsMenu() {
+  const modal = document.getElementById('modal');
+  const mbg = document.getElementById('mbg');
+  const settings = audioManager.getSettings();
+
+  modal.innerHTML = `<h2>⚙️ Settings</h2>
+    <div class="sub">Audio controls</div>
+
+    <div class="urow" style="display:block">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <b>Music Volume</b>
+        <span id="musicVolumeVal" style="color:var(--gold)">${Math.round(settings.musicVolume * 100)}%</span>
+      </div>
+      <input id="musicVolume" type="range" min="0" max="100" step="1" value="${Math.round(settings.musicVolume * 100)}" style="width:100%">
+    </div>
+
+    <div class="urow" style="display:block">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <b>SFX Volume</b>
+        <span id="sfxVolumeVal" style="color:var(--gold)">${Math.round(settings.sfxVolume * 100)}%</span>
+      </div>
+      <input id="sfxVolume" type="range" min="0" max="100" step="1" value="${Math.round(settings.sfxVolume * 100)}" style="width:100%">
+    </div>
+
+    <div class="urow" style="justify-content:space-between">
+      <label style="display:flex;gap:8px;align-items:center"><input id="muteMusic" type="checkbox" ${settings.muteMusic ? 'checked' : ''}> Mute Music</label>
+    </div>
+
+    <div class="urow" style="justify-content:space-between">
+      <label style="display:flex;gap:8px;align-items:center"><input id="muteSfx" type="checkbox" ${settings.muteSfx ? 'checked' : ''}> Mute SFX</label>
+    </div>
+
+    <div class="mfoot">
+      <button class="mclose" id="reset-audio">Reset Audio</button>
+      <button class="mclose" id="settings-close">Close</button>
+    </div>`;
+
+  mbg.style.display = 'flex';
+
+  const musicSlider = document.getElementById('musicVolume');
+  const sfxSlider = document.getElementById('sfxVolume');
+  const musicVal = document.getElementById('musicVolumeVal');
+  const sfxVal = document.getElementById('sfxVolumeVal');
+  const muteMusic = document.getElementById('muteMusic');
+  const muteSfx = document.getElementById('muteSfx');
+
+  musicSlider.oninput = () => {
+    const val = Number(musicSlider.value);
+    musicVal.textContent = `${val}%`;
+    audioManager.setMusicVolume(val / 100);
+  };
+
+  sfxSlider.oninput = () => {
+    const val = Number(sfxSlider.value);
+    sfxVal.textContent = `${val}%`;
+    audioManager.setSfxVolume(val / 100);
+  };
+
+  muteMusic.onchange = () => {
+    audioManager.setMuteMusic(muteMusic.checked);
+  };
+
+  muteSfx.onchange = () => {
+    audioManager.setMuteSfx(muteSfx.checked);
+  };
+
+  document.getElementById('reset-audio').onclick = () => {
+    const next = audioManager.resetAudio();
+    musicSlider.value = String(Math.round(next.musicVolume * 100));
+    sfxSlider.value = String(Math.round(next.sfxVolume * 100));
+    musicVal.textContent = `${Math.round(next.musicVolume * 100)}%`;
+    sfxVal.textContent = `${Math.round(next.sfxVolume * 100)}%`;
+    muteMusic.checked = next.muteMusic;
+    muteSfx.checked = next.muteSfx;
+  };
+
+  document.getElementById('settings-close').onclick = closeModal;
+}
+
+// ============================================================
 // WORLD MAP
 // ============================================================
 
@@ -921,7 +1169,14 @@ function openAttackModal(node) {
 // RENDERING
 // ============================================================
 
-function render() {
+function render(now = performance.now()) {
+  const dt = Math.max(0.0001, (now - lastFrameTs) / 1000);
+  lastFrameTs = now;
+  fps = 0.9 * fps + 0.1 * (1 / dt);
+
+  animationManager.update(now);
+  spriteRenderer.beginFrame();
+
   if (engine.state.view === 'castle') {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#3e5a22';
@@ -1042,22 +1297,59 @@ function render() {
         drawOuterFeature(o.x, o.y);
       } else if (o.kind === 'perim') {
         const def = o.type === 'gate' ? { shape: 'gate', h: 34 } : { shape: 'pwall', h: 24 };
-        drawBuilding(o.x, o.y, def);
+        spriteRenderer.drawWall(ctx, {
+          x: o.x,
+          y: o.y,
+          level: o.type === 'gate' ? 2 : 1,
+          def,
+        });
       } else if (o.kind === 'scaffold') {
         const def = BUILDINGS[o.type];
-        if (def) drawScaffold(o.x, o.y, def, o.progress);
+        if (def) {
+          const level = BuildingSystem.getLevel(engine.state.buildingLevels, o.x, o.y);
+          spriteRenderer.drawConstruction(ctx, {
+            x: o.x,
+            y: o.y,
+            type: o.type,
+            level,
+            progress: o.progress,
+            def,
+          });
+        }
       } else {
         const def = BUILDINGS[o.type];
-        if (def) drawBuilding(o.x, o.y, def);
+        if (!def) continue;
+
+        const level = BuildingSystem.getLevel(engine.state.buildingLevels, o.x, o.y);
+        const payload = {
+          x: o.x,
+          y: o.y,
+          type: o.type,
+          level,
+          def,
+        };
+
+        if (o.type === 'keep') {
+          payload.level = engine.state.castleLevel || 1;
+          spriteRenderer.drawCastle(ctx, payload);
+        } else if (def.shape === 'wall' || o.type === 'innerwall') {
+          spriteRenderer.drawWall(ctx, payload);
+        } else if (def.deco) {
+          spriteRenderer.drawDecoration(ctx, payload);
+        } else {
+          spriteRenderer.drawBuilding(ctx, payload);
+        }
       }
     }
   }
+
+  updateDevOverlay();
 
   requestAnimationFrame(render);
 }
 
 // Draw an under-construction scaffold at tile x,y with progress 0..1
-function drawScaffold(x, y, def, progress) {
+function drawScaffoldProcedural(x, y, def, progress) {
   const { sx, sy } = tileToScreen(x, y);
   if (!onScreen(sx, sy)) return;
   const cx = sx;
@@ -1075,7 +1367,7 @@ function drawScaffold(x, y, def, progress) {
   ctx.rect(cx - TILE_W, baseY - buildH - 2, TILE_W * 2, buildH + 2);
   ctx.clip();
   ctx.globalAlpha = 0.55;
-  drawBuilding(x, y, def);
+  drawBuildingProcedural(x, y, def);
   ctx.restore();
 
   // Wooden scaffold poles
@@ -1187,7 +1479,7 @@ function drawGround(gx, gy) {
   }
 }
 
-function drawBuilding(x, y, def) {
+function drawBuildingProcedural(x, y, def) {
   const { sx, sy } = tileToScreen(x, y);
   const cx = sx;
   const baseY = sy + TILE_H;
@@ -1774,6 +2066,20 @@ canvas.addEventListener('touchend', () => {
 });
 
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'F8') {
+    e.preventDefault();
+    devMode = !devMode;
+    updateDevModeUI();
+    toast(devMode ? 'Developer mode enabled' : 'Developer mode disabled', 'good');
+    return;
+  }
+
+  if (e.key === 'F9') {
+    e.preventDefault();
+    openAssetBrowser();
+    return;
+  }
+
   if (e.key === 'Escape') {
     if (document.getElementById('mbg').style.display === 'flex') closeModal();
     else if (engine.state.view === 'world') hideWorldMap();
@@ -1808,6 +2114,8 @@ document.getElementById('researchBtn').onclick = openResearchMenu;
 document.getElementById('heroBtn').onclick = openHeroPanel;
 document.getElementById('inboxBtn').onclick = openInbox;
 document.getElementById('questsBtn').onclick = openQuestsPanel;
+document.getElementById('settingsBtn').onclick = openSettingsMenu;
+document.getElementById('assetBrowserBtn').onclick = openAssetBrowser;
 document.getElementById('wmRecruit').onclick = openRecruitMenu;
 document.getElementById('wmBack').onclick = hideWorldMap;
 

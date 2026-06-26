@@ -36,6 +36,12 @@ export class GameEngine {
       buildingLevels: {},
       castleLevel: 1,
       prestige: 0,
+      audioSettings: {
+        musicVolume: 0.6,
+        sfxVolume: 0.8,
+        muteMusic: false,
+        muteSfx: false,
+      },
       researched: [],        // array of completed tech IDs
       activeResearch: null,  // { id, startTime, duration }
     };
